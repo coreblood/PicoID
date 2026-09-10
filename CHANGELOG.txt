@@ -1,0 +1,78 @@
+PicoID - Changelog
+==================
+
+1.15
+- PICO share strings: the new Share button (top bar) builds a compact
+  "PICO1:..." string of your equipped procs to copy and paste anywhere;
+  pasting a friend's string into the same dialog and pressing View opens a
+  read-only popup of their procs - names, origins, drop sources and duplicate
+  highlighting rebuilt from your own local PicoID Data tables. Entirely
+  offline: nothing is ever sent on the addon pipe, so the server throttle is
+  untouched. Strings are version-tagged and checksummed - a chat-truncated or
+  mangled paste is detected and named instead of showing half a gear set.
+  (Direct addon-to-addon delivery is deliberately not included; it needs the
+  server admin's sign-off on player-to-player addon traffic first.)
+- Icons: the Item, Imprinted proc and Item of origin columns now show their
+  icons at the left of the text. Origin icons come from ICIPROCSRC, a verb the
+  server has been sending in the ICINV stream all along (the sole item
+  carrying the proc, sent only when unambiguous) that PicoID previously
+  ignored -- multi-source procs stay text-only by design. Origin ids ride the
+  PICO string too, so shared lists show them as well.
+- Hover now shows the proc's full effect -- damage AND healing, hybrids show
+  both -- with its numbers rewritten to the imprinted soulforge magnitude,
+  exactly the way the Dashboard's extraction window previews a proc (stock
+  description x server-sent base values x magnitude; fully client-side).
+- Hover also states the proc's scaling coefficients, from the ICIPROCFACT
+  facts the server already sends per proc: whether ranks raise it, and the
+  spell power / attack power percentages it scales with.
+- Sortable columns: click a header to sort by it, again to reverse, a third
+  time to restore gear order.
+- Filter box (bottom-right): typing narrows the list live, matching any
+  column. Esc clears it. Totals still describe the full gear set.
+- Shift-click a row to insert just the proc ID into an open chat box
+  (plain click still inserts "[Proc Name] (ID)").
+- First user manual (MANUAL.txt).
+- Window title shortened to make room for the Share button.
+
+1.14
+- Server-throttle rework (by the server admin, adopted as the live baseline):
+  * USPELLDMG damage is fetched once, on hover, for the hovered proc only, with a
+    6s timeout that clears the "asked" flag but never re-sends on its own. The old
+    twice-a-second retry pump (which overran the per-account token bucket) is gone.
+  * The prefetch that fired at login and on every gear change (window closed) is removed.
+  * ICINV is debounced to one request per 10s (it costs 6 tokens on the pipe).
+  * The 810 KB proc/drop tables moved to a separate LoadOnDemand addon, PicoIDData,
+    pulled in by EnsureData() on first use, so players who never open the window
+    never parse them. PicoIDData must stay force-enabled in the launcher manifest.
+  * The USPELLDMGR tooltip repaint now requires PicoID's own row tag, so it can no
+    longer overwrite Uncapped's item tooltips.
+  * The empty-state message now asks UncappedThrottle and reports a dropped request.
+- Author corrected to Mhortai.
+
+1.13
+- Click a proc row to insert "[Proc Name] (ID)" into your active chat box.
+- Totals line at the bottom: items, procs, and how many are duplicated.
+- Duplicated procs now also get a red row background, not just red text.
+
+1.12
+- Potency: re-requested unanswered figures (superseded by the 1.14 hover model).
+- Dropped by: manual sources for Speed Infusion (Mythic Legendary Bags), the
+  Wraith Scythe Drain Life (World Drop), Turalyon's (Vendor), Manslayer (Hakkar).
+
+1.11
+- "Dropped by" now covers every proc: set bonuses show "Vendor", quest items
+  show "Quest", plus the existing boss / crafted / sold-by sources.
+
+1.10
+- Opening the window requests the imprint data from the server immediately (ICINV).
+
+1.9
+- "Dropped by" also shows "Crafted (Profession)" or "Sold by <NPC>".
+
+1.8
+- Removed the hidden spell-description scanning tooltip (it disturbed imprint/vestige
+  lines other addons draw on item tooltips). Hover uses the server number only.
+
+1.7 and earlier
+- Duplicate-proc red highlight, "Dropped by" column, proc hover potency, InvID-style
+  columns, Print/export, minimap button, options panel, and initial release.

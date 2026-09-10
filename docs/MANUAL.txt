@@ -1,0 +1,115 @@
+PicoID v1.15 - User Manual
+==========================
+by Mhortai - for the Uncapped realm (WotLK 3.3.5a)
+
+PicoID lists every proc imprinted on your equipped items - the proc's name,
+its spell ID, the item it originally comes from, and where that item drops.
+It is a viewer only: it reads, it never changes anything on your character.
+
+
+OPENING THE WINDOW
+------------------
+Any of these:
+  * Click the spyglass button on the minimap.
+  * Type /picoid or /pid.
+  * Interface -> AddOns -> PicoID -> "Open PicoID".
+Esc or the X closes it. Drag the title area to move it; drag the grip in the
+bottom-right corner to resize. "Reset" restores the default size and position.
+
+
+THE COLUMNS
+-----------
+  Item             The equipped item carrying the proc (with its icon).
+  Imprinted proc   The proc's name (with its spell icon).
+  Proc ID          Its spell ID (white). Click a row to insert
+                   "[Proc Name] (ID)" into a chat box you already have open -
+                   handy for linking a proc to someone. Shift-click inserts
+                   just the bare ID number.
+  Item of origin   The item this proc originally belongs to (with its icon
+                   when the server names a single unambiguous source item;
+                   multi-source procs show text only).
+  Dropped by       Where that item comes from (boss, crafted, vendor, quest...).
+
+Click a COLUMN HEADER to sort by that column; click it again to reverse,
+and a third time to go back to gear order. The small FILTER BOX in the
+bottom-right corner narrows the list as you type - it matches any column
+(item, proc, ID, origin, source). Esc clears it. The totals line always
+describes your full gear set, filtered or not.
+
+RED ROWS are duplicated procs: the same proc imprinted on two or more of your
+equipped items. A duplicated proc never fires twice - the extra copies are
+wasted, which is exactly what this window exists to catch. The totals line at
+the bottom counts your items, procs, and duplicates.
+
+
+HOVER: DAMAGE, HEALING, AND WHAT SCALES IT
+------------------------------------------
+Hovering a row shows everything about that proc:
+
+  * "Approx. ... with your stats" - what it would actually hit for with your
+    current stats. This figure comes from the server, once per hover. If the
+    server is busy it may drop the request - the tooltip then stays at
+    "Calculating with your stats..." and simply hovering again later asks
+    once more. This is deliberate: the realm meters how fast addons may talk
+    to it, and PicoID never repeats a request on its own.
+  * The full effect at its imprinted magnitude - the spell's description with
+    its numbers rewritten to what this bound copy does, the same preview the
+    Dashboard's extraction window shows. This covers healing as well as
+    damage, and hybrid procs show both.
+  * What scales it - whether ranks raise the proc, and the spell power /
+    attack power percentages it scales with, straight from the server's
+    per-proc facts.
+
+For the same reason, the list itself refreshes from the server at most once
+every 10 seconds. The Refresh button re-renders instantly from what is
+already known; a full re-ask only goes out when that window has passed.
+
+
+SHARING YOUR PROCS (PICO STRINGS)
+---------------------------------
+The Share button (top bar) opens a dialog that works in both directions,
+like sharing a talent build:
+
+  * YOUR STRING - the top box holds a compact "PICO1:..." string of your
+    procs, pre-selected. Press Ctrl+C and paste it anywhere: Discord, the
+    forum, an in-game mail or chat line.
+
+  * A FRIEND'S STRING - paste it into the lower box and press View (or
+    Enter). A read-only popup opens with their full proc list - names,
+    origins, drop sources and duplicate highlighting, exactly like your own
+    window. Clicking a row inserts the proc into your open chat box.
+
+Notes:
+  * The string carries only ID numbers; both sides' own PicoID rebuilds the
+    names locally. Nothing is sent to or through the server - sharing is
+    pure copy-and-paste.
+  * In-game chat cuts messages at 255 characters. A small gear set fits in
+    one line; a large one may not - Discord or in-game mail keep any length
+    intact. A cut or mangled string is detected and named, never shown as a
+    half gear set.
+  * Damage figures are not shown for shared lists - "with your stats" only
+    means something on your own gear.
+
+
+OPTIONS
+-------
+Interface -> AddOns -> PicoID:
+  * Show minimap button (drag the button itself to move it around the map)
+  * Font size and window opacity sliders
+
+/picoid debug prints a short internal status readout.
+
+
+THE PicoID DATA ADDON
+---------------------
+Proc names and origins come from a companion addon, "PicoID Data", which
+loads itself only when first needed. Leave it ticked in the AddOns list at
+the character screen - if it is unticked, the origin columns stay blank and
+PicoID will tell you to re-tick it.
+
+
+THE PRINT BUTTON
+----------------
+Print opens the list as plain text, pre-selected for Ctrl+C, and also saves
+it to SavedVariables (WTF\...\PicoIDExport.lua) on logout - useful for
+pasting into a spreadsheet or a forum post.
