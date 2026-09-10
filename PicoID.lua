@@ -1,5 +1,5 @@
 ------------------------------------------------------------------
--- PicoID v1.15 — imprinted-proc inventory viewer (WotLK 3.3.5a)
+-- PicoID v1.16 — imprinted-proc inventory viewer (WotLK 3.3.5a)
 -- Shows every equipped item with the procs imprinted on it:
 --   Item - Imprinted proc - Proc ID - Item of origin
 -- Duplicated procs are shown in red (they never fire twice).
@@ -15,6 +15,18 @@
 --   magnitude, extraction-window style, plus the proc's scaling coefficients
 --   from ICIPROCFACT; sortable columns; a live filter box; Shift-click for
 --   the bare proc ID; and the first MANUAL.txt.
+--
+-- v1.16: DIRECT in-game sharing, approved by the server owner: the Share
+--   dialog gains a "send to player" row that whispers your PICO string to
+--   another PicoID user on the client-owned "PICO" prefix (zero AddonThrottle
+--   tokens -- it rides the CMSG_MESSAGECHAT anti-DoS lane instead, paced far
+--   under it). They get ONE clickable chat line; nothing auto-opens, received
+--   text is never executed, delivery is honestly reported as unconfirmed
+--   (this realm has no addon receipt), and an accept-shares option can drop
+--   incoming shares entirely. All limits in the DIRECT SHARING section are
+--   the admin's, hard-coded. Also: the hover's SP/AP percentages relabeled
+--   as explicit-data maxima (see ScalingNote) -- zeros are now hidden, since
+--   zero only means "no explicit bonus-data row", not "no scaling".
 --
 -- Originally by Mhortai (v1.13), shipped on Uncapped with realm-side fixes.
 --
@@ -44,6 +56,7 @@ local DEFAULTS = {
     minimapPos = 200,     -- angle (degrees) around the minimap
     fontSize   = 13,
     opacity    = 0.8,
+    acceptShares = true,  -- v1.16: accept direct PICO shares from other players
 }
 
 local db  -- SavedVariables (PicoIDDB), set on ADDON_LOADED
@@ -362,31 +375,33 @@ local function ScaleDescription(desc, bases, mult)
     return nil
 end
 
--- What actually moves this proc's numbers, from ICIPROCFACT
--- (<stackCap>:<rankScales>:<spPct>:<apPct>) -- the spell power / attack power
--- percentages ARE the proc's scaling coefficients, server-sent per proc.
--- Wording mirrors UncappedSoulForge's procScalingNote.
+-- What the server LISTS as moving this proc's numbers, from ICIPROCFACT
+-- (<stackCap>:<rankScales>:<spPct>:<apPct>).
+-- ⚠ v1.16 RELABEL (admin clarification, 2026-09-11): the SP/AP percentages
+--   are rounded MAXIMA of explicit spell_bonus_data rows, collected across
+--   the proc and its trigger descendants to depth 2. They are NOT complete
+--   effective coefficients: DBC fallback coefficients, handler overrides and
+--   player-specific modifiers are not represented, forge potency is excluded,
+--   and the SP and AP maxima can come from DIFFERENT sub-effects. A value of
+--   ZERO only means "no explicit bonus-data row" -- it does NOT establish
+--   that nothing scales the spell. So zeros are HIDDEN here; the old wording
+--   ("nothing else scales it either") asserted exactly what a zero cannot
+--   support and must not come back.
 local function ScalingNote(p)
     if not p or p.rankScales == nil then return nil end   -- older server
     local from = {}
     if p.spPct and p.spPct > 0 then
-        from[#from + 1] = string.format("spell power (%d%%)", p.spPct)
+        from[#from + 1] = string.format("up to %d%% of spell power", p.spPct)
     end
     if p.apPct and p.apPct > 0 then
-        from[#from + 1] = string.format("attack power (%d%%)", p.apPct)
+        from[#from + 1] = string.format("up to %d%% of attack power", p.apPct)
     end
-    if p.rankScales then
-        if #from > 0 then
-            return "Ranks raise this, and it also scales with "
-                .. table.concat(from, " and ") .. "."
-        end
-        return "Ranks raise this."
-    end
+    local rank = p.rankScales and "Ranks raise this." or "Ranks do not raise this."
     if #from > 0 then
-        return "Ranks do NOT raise this - it scales with "
-            .. table.concat(from, " and ") .. " instead."
+        return rank .. " Server-listed scaling: " .. table.concat(from, " and ")
+            .. " (explicit data - actual scaling can differ)."
     end
-    return "Ranks do NOT raise this, and nothing else scales it either."
+    return rank
 end
 
 local function ShowProcTooltip(anchor, spellId)
@@ -925,9 +940,10 @@ end
   string sends NOTHING on the addon pipe -- no SendAddonMessage, no new verb,
   zero tokens against the AddonThrottle bucket. The string travels as text
   the PLAYER pastes wherever they like (Discord, forum, an in-game chat
-  line). Direct addon-to-addon delivery on a "PICO" prefix is deliberately
-  NOT implemented: player-to-player addon whispers ride CMSG_MESSAGECHAT
-  through the server's anti-DoS metering and need the admin's sign-off first.
+  line). Direct addon-to-addon delivery on the "PICO" prefix was approved
+  by the server owner and shipped in v1.16 -- see the DIRECT SHARING section
+  below. THIS copy-paste path stays exactly as it was and remains the
+  size-unlimited fallback for gear sets over the direct-send byte cap.
 
   Format (version-tagged so a future PICO2 can change it):
     PICO1:<player>:<slot>=<itemId>=<sid>[.<chance>][,<sid>...]|<slot>=...!<sum>
@@ -982,6 +998,11 @@ local function ParseShareString(text)
     if not raw then
         return nil, "No PICO string found in the pasted text."
     end
+    -- v1.16: overall ceiling. A worst-case legitimate set is well under 1 KB;
+    -- anything bigger is not a PICO string and is not worth walking.
+    if #raw > 2000 then
+        return nil, "That is too long to be a PICO string."
+    end
     local payload, sumStr = string.match(raw, "^PICO1:(.*)!(%d+)$")
     if not payload then
         return nil, "The string is incomplete - its end is missing. In-game chat cuts at 255 characters; get the full string (Discord keeps it in one piece)."
@@ -990,23 +1011,27 @@ local function ParseShareString(text)
         return nil, "The string is damaged or truncated - ask for it to be sent again in one piece."
     end
     local name, body = string.match(payload, "^([^:]+):(.+)$")
-    if not name then
+    if not name or #name > 24 then
         return nil, "The string's body is malformed."
     end
     local items = {}
+    -- v1.16: BOUNDED numeric parsing (a direct-send requirement, applied to
+    -- the paste path too): every field has a digit cap and the slot must be
+    -- a real equipment slot. Every legitimate 1.15 string passes unchanged.
     for section in string.gmatch(body, "[^|]+") do
         local slot, itemId, plist = string.match(section, "^(%d+)=(%d+)=(.+)$")
-        if slot then
+        local slotN = (slot and #slot <= 2) and tonumber(slot) or nil
+        if slotN and slotN >= 1 and slotN <= 19 and #itemId <= 8 then
             local procs = {}
             for part in string.gmatch(plist, "[^,]+") do
                 local sid, ch, src = string.match(part, "^(%d+)%.?(%d*)%.?(%d*)$")
-                if sid then
+                if sid and #sid <= 8 and #ch <= 3 and #src <= 8 then
                     procs[#procs + 1] = { spellId = tonumber(sid),
                         chance = tonumber(ch), src = tonumber(src) }
                 end
             end
             if #procs > 0 then
-                items[#items + 1] = { slot = tonumber(slot),
+                items[#items + 1] = { slot = slotN,
                     itemId = tonumber(itemId), procs = procs }
             end
         end
@@ -1296,12 +1321,303 @@ local function ViewerOpen(data)
     viewPrimer:Show()
 end
 
+--==================== DIRECT SHARING (PICO whispers) =============
+--[[ v1.16: send your PICO string straight to another online PicoID user.
+  APPROVED by the server owner (relayed by the admin, 2026-09-11), with the
+  admin's design limits. Every number below is HIS rule, not a tuning knob:
+
+  * The "PICO" prefix is client-owned and collision-free on this realm.
+    UNC, REAGENTBANK, UVER, UTS and DSTATS are reserved for server traffic
+    and must never carry shares.
+  * PICO whispers cost ZERO AddonThrottle tokens -- this feature never
+    touches the ICINV/USPELLDMG bucket. They DO count toward the session's
+    CMSG_MESSAGECHAT anti-DoS allowance (policy: 60 packets per session per
+    world-second, BLOCKING -- overflow is requeued and stalls this session's
+    own processing pass), shared with ordinary chat and every other addon's
+    chat. The pacing below keeps us far under it by ourselves, but headroom
+    during another addon's message storm is not guaranteed -- one more
+    reason nothing here ever retries on its own.
+  * Sender: explicit button only, NO automatic retry, ONE outbound transfer
+    at a time, >= 0.5s between chunks, >= 3s between transfers, >= 10s
+    between transfers to the same recipient. The complete string is capped
+    at 900 bytes / 4 chunks / 240 bytes per message INCLUDING the chunk
+    header; an oversized share is rejected BEFORE any part is sent. The
+    copy-paste string has no cap and is the designed fallback.
+  * Receiver: one assembly per sender, expiring after 10s; a new first
+    chunk replaces an unfinished assembly; contradictory totals,
+    out-of-range sequence numbers, duplicate chunks and excess bytes
+    discard it; concurrent incomplete assemblies are bounded. The checksum
+    AND the bounded numeric parser must pass BEFORE the one clickable chat
+    line appears. Nothing ever auto-opens, and received text is data --
+    never evaluated as Lua.
+  * Notifications: at most one per sender per 10s and six per minute
+    overall (the share itself is still held -- only the extra line is
+    suppressed). The accept-shares option (Interface -> AddOns -> PicoID)
+    drops incoming chunks entirely. It matters more than it looks: addon
+    whispers BYPASS the game's normal ignore/accept-whisper filtering, so
+    this option is the recipient's only wall.
+
+  ⚠ DELIVERY IS UNCONFIRMED BY DESIGN. This realm has no addon delivery
+    acknowledgement. SendAddonMessage returning proves nothing; silence
+    proves nothing (no PicoID installed, shares switched off and a lost
+    chunk are indistinguishable). The ONLY explicit signal is the client's
+    own "No player named ... is currently playing" system line, which
+    aborts the transfer and is surfaced as exactly that. Everything else
+    is reported as "sent - delivery unconfirmed". NEVER "delivered".
+
+  Wire format, one whisper per chunk on prefix "PICO":
+      <seq>:<total>:<payload>          (seq and total: one digit, 1..4)
+  concat(payloads) is the ordinary PICO1 string, checksum included, so the
+  paste-path parser -- and all of its validation -- is the single decoder. ]]
+
+local StartDirectSend, OnDirectChunk, DirectDebugLine
+do
+    local PREFIX            = "PICO"
+    local MAX_STRING        = 900   -- whole PICO1 string, bytes
+    local MAX_MSG           = 240   -- one addon message, bytes, incl. header
+    local MAX_CHUNKS        = 4
+    local CHUNK_GAP         = 0.5   -- s between chunks
+    local TRANSFER_GAP      = 3     -- s between transfers, any recipient
+    local RECIPIENT_GAP     = 10    -- s between transfers to one recipient
+    local ASSEMBLY_TTL      = 10    -- s an incomplete assembly may live
+    local MAX_ASSEMBLIES    = 8     -- concurrent incomplete assemblies
+    local NOTIFY_SENDER_GAP = 10    -- s between notifications per sender
+    local NOTIFY_PER_MIN    = 6     -- notifications per minute, overall
+    local MAX_HELD_SHARES   = 20    -- latest-per-sender lists kept
+
+    ------------------------------ sender -----------------------------
+    local sendState                  -- { target, chunks, idx, nextAt }
+    local lastChunkAt = -1e9         -- stamp of any outbound PICO chunk
+    local lastToRecipient = {}       -- lower(name) -> stamp
+    local watchTarget, watchUntil = nil, 0
+    local statusSink                 -- set by the share dialog
+
+    local function Status(ok, text)
+        if statusSink then statusSink(ok, text) end
+    end
+
+    -- The one explicit failure signal that exists: the client's own
+    -- player-not-found system line. Registered only around a transfer.
+    local sysWatch = CreateFrame("Frame")
+    sysWatch:SetScript("OnEvent", function(self, _, msg)
+        if GetTime() > watchUntil then
+            self:UnregisterEvent("CHAT_MSG_SYSTEM")
+            return
+        end
+        if not (msg and watchTarget) then return end
+        local notFound = string.format(ERR_CHAT_PLAYER_NOT_FOUND_S
+            or "No player named '%s' is currently playing.", watchTarget)
+        if msg == notFound then
+            if sendState then sendState = nil end   -- stop the pump; the rest
+            Status(false, "No player named '" .. watchTarget    -- is wasted
+                .. "' is online - nothing was delivered.")
+            watchTarget = nil
+            self:UnregisterEvent("CHAT_MSG_SYSTEM")
+        end
+    end)
+
+    local pump = CreateFrame("Frame")
+    pump:Hide()
+    pump:SetScript("OnUpdate", function(self)
+        if not sendState then self:Hide() return end
+        local now = GetTime()
+        if now < sendState.nextAt then return end
+        local i = sendState.idx
+        SendAddonMessage(PREFIX, sendState.chunks[i], "WHISPER", sendState.target)
+        lastChunkAt = now
+        if i >= #sendState.chunks then
+            Status(true, string.format(
+                "All %d part%s sent to %s - delivery is UNCONFIRMED (this realm "
+                .. "has no addon receipt). If nothing appeared for them: no "
+                .. "PicoID 1.16+, shares switched off, or a lost part. "
+                .. "Re-sending is manual, 10s per recipient.",
+                #sendState.chunks, #sendState.chunks == 1 and "" or "s",
+                sendState.target))
+            lastToRecipient[string.lower(sendState.target)] = now
+            sendState = nil
+            self:Hide()
+        else
+            sendState.idx = i + 1
+            sendState.nextAt = now + CHUNK_GAP
+            Status(true, string.format("Sending to %s - part %d of %d...",
+                sendState.target, i + 1, #sendState.chunks))
+        end
+    end)
+
+    function StartDirectSend(target, sink)
+        if sink then statusSink = sink end
+        target = string.gsub(string.gsub(target or "", "^%s+", ""), "%s+$", "")
+        if target == "" then
+            Status(false, "Type a character name first."); return
+        end
+        if string.find(target, "%s") then
+            Status(false, "Character names have no spaces."); return
+        end
+        if sendState then
+            Status(false, "A send is already in progress - one transfer at a time."); return
+        end
+        local now = GetTime()
+        if now - lastChunkAt < TRANSFER_GAP then
+            Status(false, "Wait a moment - at least 3 seconds between sends."); return
+        end
+        local lastTo = lastToRecipient[string.lower(target)]
+        if lastTo and now - lastTo < RECIPIENT_GAP then
+            Status(false, string.format(
+                "Wait %d more second(s) before re-sending to %s.",
+                math.ceil(RECIPIENT_GAP - (now - lastTo)), target)); return
+        end
+        local s = BuildShareString()
+        if not s then
+            Status(false, "No imprint data yet - open the PicoID window first, then try again."); return
+        end
+        if #s > MAX_STRING then
+            -- Rejected BEFORE sending any part (admin rule).
+            Status(false, string.format(
+                "This list is %d bytes - over the %d-byte direct-send limit. "
+                .. "Use the copy-paste string above instead (it has no limit).",
+                #s, MAX_STRING)); return
+        end
+        -- Chunk. Header "<seq>:<total>:" is at most 4 bytes (both one digit),
+        -- so a fixed 4-byte reserve keeps every message under MAX_MSG
+        -- INCLUDING its header, and 4 x (MAX_MSG - 4) = 944 >= MAX_STRING.
+        local payloadMax = MAX_MSG - 4
+        local total = math.ceil(#s / payloadMax)
+        local chunks = {}
+        for i = 1, total do
+            chunks[i] = i .. ":" .. total .. ":"
+                .. string.sub(s, (i - 1) * payloadMax + 1, i * payloadMax)
+        end
+        sendState = { target = target, chunks = chunks, idx = 1, nextAt = 0 }
+        watchTarget = target
+        watchUntil = now + (total - 1) * CHUNK_GAP + 6
+        sysWatch:RegisterEvent("CHAT_MSG_SYSTEM")
+        Status(true, string.format("Sending to %s - part 1 of %d...", target, total))
+        pump:Show()
+    end
+
+    ----------------------------- receiver ----------------------------
+    local assemblies, nAssemblies = {}, 0   -- lower(sender) -> assembly
+    local latestShare = {}                  -- sender -> latest parsed data
+    local heldOrder = {}                    -- fifo bounding latestShare
+    local lastNotifyBySender = {}
+    local notifyStamps = {}
+
+    local function Drop(key)
+        if assemblies[key] then
+            assemblies[key] = nil
+            nAssemblies = nAssemblies - 1
+        end
+    end
+
+    local function PruneAssemblies(now)
+        for k, a in pairs(assemblies) do
+            if now > a.expires then Drop(k) end
+        end
+    end
+
+    function OnDirectChunk(sender, body)
+        if not db or db.acceptShares == false then return end  -- the wall
+        if not sender or sender == "" or not body then return end
+        if #body > MAX_MSG then return end                     -- oversized message
+        local seq, total, payload = string.match(body, "^(%d):(%d):(.*)$")
+        seq, total = tonumber(seq), tonumber(total)
+        if not seq or not total then return end
+        if total < 1 or total > MAX_CHUNKS
+           or seq < 1 or seq > total then return end           -- out of range
+        local key = string.lower(sender)
+        local now = GetTime()
+        PruneAssemblies(now)
+        local a = assemblies[key]
+        if seq == 1 then
+            -- A new first chunk replaces an unfinished assembly (admin rule).
+            if not a then
+                if nAssemblies >= MAX_ASSEMBLIES then return end  -- bounded
+                nAssemblies = nAssemblies + 1
+            end
+            a = { total = total, parts = {}, got = 0, bytes = 0,
+                  expires = now + ASSEMBLY_TTL }
+            assemblies[key] = a
+        elseif not a then
+            return                       -- a middle chunk with nothing to join
+        elseif a.total ~= total then
+            Drop(key); return            -- contradictory totals
+        end
+        if a.parts[seq] then Drop(key); return end             -- duplicate chunk
+        a.parts[seq] = payload
+        a.got = a.got + 1
+        a.bytes = a.bytes + #payload
+        if a.bytes > MAX_STRING then Drop(key); return end     -- excess bytes
+        if a.got < a.total then return end
+        Drop(key)
+        -- Complete. Checksum + bounded numeric parse BEFORE anything shows.
+        -- A failed parse stays silent: there is nothing honest to say about
+        -- who or what mangled it, and noise here would be a griefing lever.
+        local data = ParseShareString(table.concat(a.parts, "", 1, a.total))
+        if not data then return end
+        data.viaSender = sender
+        if not latestShare[sender] then
+            heldOrder[#heldOrder + 1] = sender
+            if #heldOrder > MAX_HELD_SHARES then
+                latestShare[table.remove(heldOrder, 1)] = nil
+            end
+        end
+        latestShare[sender] = data
+        -- Notification caps (admin rule). The share above is already held --
+        -- only the extra chat line is suppressed.
+        local last = lastNotifyBySender[sender]
+        if last and (now - last) < NOTIFY_SENDER_GAP then return end
+        for i = #notifyStamps, 1, -1 do
+            if now - notifyStamps[i] > 60 then table.remove(notifyStamps, i) end
+        end
+        if #notifyStamps >= NOTIFY_PER_MIN then return end
+        lastNotifyBySender[sender] = now
+        notifyStamps[#notifyStamps + 1] = now
+        local label = sender .. "'s PicoID"
+        if data.name and data.name ~= sender then
+            -- The string labels its owner; the whisper names its SENDER.
+            -- Show both when they differ instead of trusting the label.
+            label = label .. " (list labeled '" .. data.name .. "')"
+        end
+        DEFAULT_CHAT_FRAME:AddMessage("|Hpico:" .. sender .. "|h|cff80ffff["
+            .. label .. " - click to view]|r|h")
+    end
+
+    function DirectDebugLine()
+        local held = 0
+        for _ in pairs(latestShare) do held = held + 1 end
+        return "  direct: accept=" .. tostring(not (db and db.acceptShares == false))
+            .. "  held shares: " .. held .. "  assemblies: " .. nAssemblies
+            .. "  sending: " .. tostring(sendState ~= nil)
+    end
+
+    -- The clickable line. On 3.3.5a every |H...|h chat link lands in
+    -- SetItemRef; unknown types fall through, so wrapping the original keeps
+    -- every stock link working. The click IS the consent -- ViewerOpen runs
+    -- here and nowhere else on the receive path.
+    local origSetItemRef = SetItemRef
+    function SetItemRef(link, text, button, chatFrame)
+        local who = string.match(link or "", "^pico:(.+)$")
+        if who then
+            local data = latestShare[who]
+            if data then
+                ViewerOpen(data)
+            else
+                DEFAULT_CHAT_FRAME:AddMessage("|cffff2020PicoID|r: that share is "
+                    .. "no longer held (only the latest list per sender is kept).")
+            end
+            return
+        end
+        return origSetItemRef(link, text, button, chatFrame)
+    end
+end
+
 --========================= SHARE DIALOG ==========================
+
 -- One dialog for both directions: your string on top (pre-selected for
 -- Ctrl+C), a paste box + View underneath.
 local shareFrame = CreateFrame("Frame", "PicoIDShareFrame", UIParent)
 shareFrame:SetWidth(540)
-shareFrame:SetHeight(240)
+shareFrame:SetHeight(268)   -- v1.16: taller for the direct-send row
 shareFrame:SetPoint("CENTER")
 shareFrame:SetFrameStrata("DIALOG")
 shareFrame:SetMovable(true)
@@ -1335,10 +1651,10 @@ local shareLabel1 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlig
 shareLabel1:SetPoint("TOPLEFT", 20, -40)
 shareLabel1:SetText("Your PICO string - press Ctrl+C, then paste it anywhere (Discord keeps it in one piece):")
 
-local function MakeShareEditBox(topOffset)
+local function MakeShareEditBox(topOffset, rightOffset)
     local box = CreateFrame("EditBox", nil, shareFrame)
     box:SetPoint("TOPLEFT", 22, topOffset)
-    box:SetPoint("RIGHT", -26, 0)
+    box:SetPoint("RIGHT", rightOffset or -26, 0)
     box:SetHeight(20)
     box:SetAutoFocus(false)
     box:SetMaxLetters(0)
@@ -1357,17 +1673,53 @@ local shareLabel2 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlig
 shareLabel2:SetPoint("TOPLEFT", 20, -100)
 shareLabel2:SetText("Paste a friend's string and press View:")
 
-local importEdit = MakeShareEditBox(-118)
+-- v1.16: narrower -- the View button moved up beside it, freeing the
+-- bottom of the dialog for the direct-send row and a roomier status line.
+local importEdit = MakeShareEditBox(-118, -116)
+
+-- v1.16: the direct-send row. Approved player-to-player delivery; all the
+-- pacing, sizing and honesty rules live in the DIRECT SHARING section.
+local shareLabel3 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+shareLabel3:SetPoint("TOPLEFT", 20, -152)
+shareLabel3:SetText("Or send it straight to an online player (they need PicoID 1.16+):")
+
+local targetEdit = CreateFrame("EditBox", nil, shareFrame)
+targetEdit:SetPoint("TOPLEFT", 22, -170)
+targetEdit:SetWidth(150)
+targetEdit:SetHeight(20)
+targetEdit:SetAutoFocus(false)
+targetEdit:SetMaxLetters(24)
+targetEdit:SetFontObject(ChatFontNormal)
+targetEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
+local targetBg = targetEdit:CreateTexture(nil, "BACKGROUND")
+targetBg:SetAllPoints()
+targetBg:SetTexture(0, 0, 0, 0.5)
+
+local sendBtn = CreateFrame("Button", nil, shareFrame, "UIPanelButtonTemplate")
+sendBtn:SetPoint("LEFT", targetEdit, "RIGHT", 8, 0)
+sendBtn:SetWidth(76)
+sendBtn:SetHeight(22)
+sendBtn:SetText("Send")
 
 local shareStatus = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-shareStatus:SetPoint("TOPLEFT", 20, -150)
+shareStatus:SetPoint("TOPLEFT", 20, -198)
 shareStatus:SetPoint("RIGHT", -20, 0)
 shareStatus:SetJustifyH("LEFT")
 shareStatus:SetText("")
 
+local function ShareStatusSink(ok, text)
+    if ok then shareStatus:SetTextColor(0.6, 1, 0.6)
+    else shareStatus:SetTextColor(1, 0.4, 0.4) end
+    shareStatus:SetText(text or "")
+end
+sendBtn:SetScript("OnClick", function()
+    StartDirectSend(targetEdit:GetText(), ShareStatusSink)
+end)
+targetEdit:SetScript("OnEnterPressed", function() sendBtn:Click() end)
+
 local viewBtn = CreateFrame("Button", nil, shareFrame, "UIPanelButtonTemplate")
-viewBtn:SetPoint("BOTTOMRIGHT", -20, 20)
-viewBtn:SetWidth(80)
+viewBtn:SetPoint("LEFT", importEdit, "RIGHT", 8, 0)
+viewBtn:SetWidth(76)
 viewBtn:SetHeight(22)
 viewBtn:SetText("View")
 viewBtn:SetScript("OnClick", function()
@@ -1551,6 +1903,17 @@ local function BuildPanel()
     end)
     panel.mmCheck = mmCheck
 
+    -- v1.16: the recipient's only wall against direct shares -- addon
+    -- whispers bypass the game's normal ignore list, so unticking this is
+    -- the real "ignore", dropping incoming PICO chunks entirely.
+    local shCheck = CreateFrame("CheckButton", "PicoIDAcceptSharesCheck", panel, "OptionsCheckButtonTemplate")
+    shCheck:SetPoint("TOPLEFT", 8, -74)
+    _G["PicoIDAcceptSharesCheckText"]:SetText("Accept shares sent directly by other players")
+    shCheck:SetScript("OnClick", function(self)
+        db.acceptShares = self:GetChecked() and true or false
+    end)
+    panel.shCheck = shCheck
+
     local function MakeSlider(name, label, key, minV, maxV, step, x, y, fmt)
         local s = CreateFrame("Slider", "PicoID" .. name, panel, "OptionsSliderTemplate")
         s:SetPoint("TOPLEFT", x, y)
@@ -1568,11 +1931,11 @@ local function BuildPanel()
         end)
         return s
     end
-    panel.fontSlider = MakeSlider("Font", "Font size", "fontSize", 8, 24, 1, 16, -110, "%d")
-    panel.alphaSlider = MakeSlider("Alpha", "Opacity", "opacity", 0, 1, 0.05, 210, -110, "%.2f")
+    panel.fontSlider = MakeSlider("Font", "Font size", "fontSize", 8, 24, 1, 16, -140, "%d")
+    panel.alphaSlider = MakeSlider("Alpha", "Opacity", "opacity", 0, 1, 0.05, 210, -140, "%.2f")
 
     local open = CreateFrame("Button", nil, panel, "UIPanelButtonTemplate")
-    open:SetPoint("TOPLEFT", 16, -160)
+    open:SetPoint("TOPLEFT", 16, -190)
     open:SetWidth(120)
     open:SetHeight(22)
     open:SetText("Open PicoID")
@@ -1581,6 +1944,7 @@ end
 
 panel.refresh = function()
     panel.mmCheck:SetChecked(db.minimap)
+    panel.shCheck:SetChecked(db.acceptShares ~= false)
     panel.fontSlider:SetValue(db.fontSize)
     panel.alphaSlider:SetValue(db.opacity)
 end
@@ -1594,8 +1958,14 @@ f:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 f:SetScript("OnEvent", function(self, event, ...)
     if event == "CHAT_MSG_ADDON" then
-        local prefix, body = ...
-        if prefix == UNC_PREFIX and body then
+        local prefix, body, channel, sender = ...
+        -- v1.16: direct shares arrive on the client-owned PICO prefix,
+        -- whispers only. Everything about them lives in OnDirectChunk.
+        if prefix == "PICO" then
+            if channel == "WHISPER" and body then
+                OnDirectChunk(sender, body)
+            end
+        elseif prefix == UNC_PREFIX and body then
             if string.sub(body, 1, 2) == "IC" then
                 OnUncappedLine(body)
             else
@@ -1659,6 +2029,7 @@ SlashCmdList["PICOID"] = function(msg)
         DEFAULT_CHAT_FRAME:AddMessage("  equipped procs counted: " .. eq)
         DEFAULT_CHAT_FRAME:AddMessage("  ProcDB loaded: " .. tostring(PicoID_ProcDB ~= nil)
             .. "  DropDB: " .. tostring(PicoID_DropDB ~= nil))
+        DEFAULT_CHAT_FRAME:AddMessage(DirectDebugLine())
     else
         PicoID_Toggle()
     end

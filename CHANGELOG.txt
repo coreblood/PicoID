@@ -1,6 +1,48 @@
 PicoID - Changelog
 ==================
 
+1.16
+- Direct in-game sharing, approved by the server owner: the Share dialog gains
+  a "send to player" row - type an online player's name, press Send, and your
+  PICO string travels to their PicoID over addon whispers on the client-owned
+  "PICO" prefix. They get ONE clickable "[<You>'s PicoID - click to view]"
+  chat line; clicking it opens the same read-only viewer as a pasted string.
+  Nothing ever opens by itself, incoming text is never executed, and an
+  "Accept shares sent directly by other players" option (Interface -> AddOns
+  -> PicoID, default on) drops incoming shares entirely - which matters
+  because addon whispers bypass the game's normal ignore list.
+- The admin's safety limits, hard-coded: explicit button only, no automatic
+  retry, one transfer at a time, 0.5s between parts, 3s between sends, 10s
+  between sends to the same player; the whole string is capped at 900 bytes /
+  4 parts / 240 bytes per message, and an oversized list is refused before
+  anything is sent (the copy-paste string has no cap and stays the fallback
+  for huge gear sets). Receiving side: one assembly per sender expiring after
+  10s, a fresh first part replaces an unfinished one, contradictory totals /
+  out-of-range or duplicate parts / excess bytes discard it, concurrent
+  assemblies are bounded, and the checksum plus a bounded numeric parse must
+  pass before the chat line appears. Notifications cap at one per sender per
+  10s and six per minute (the list itself is still received - only the extra
+  line is skipped). PICO whispers cost zero AddonThrottle tokens - the
+  ICINV / USPELLDMG budget is untouched.
+- Honest delivery reporting: this realm has no addon delivery receipt, so the
+  sender is told "sent - delivery unconfirmed", never "delivered". The one
+  explicit signal that exists - the client's own "No player named X is
+  currently playing" line - aborts the transfer and is surfaced as exactly
+  that. The chat line also notes when a received list's embedded owner name
+  differs from the player who actually sent it.
+- Scaling-note relabel (admin clarification): the hover's spell power /
+  attack power percentages are the server's rounded MAXIMA of explicit bonus
+  data (collected to trigger depth 2) - not complete effective coefficients.
+  Overrides, DBC fallbacks, player-specific modifiers and forge potency are
+  not included, and the SP and AP figures can come from different
+  sub-effects. The tooltip now says "up to N% ... (explicit data - actual
+  scaling can differ)", and a zero - which only means "no explicit row", not
+  "no scaling" - is hidden instead of being presented as "nothing else
+  scales it either".
+- Bounded parsing hardening on ALL strings, pasted ones included: per-field
+  digit caps, a real equipment-slot range check, and an overall length
+  ceiling. Every legitimate 1.15 string parses unchanged.
+
 1.15
 - PICO share strings: the new Share button (top bar) builds a compact
   "PICO1:..." string of your equipped procs to copy and paste anywhere;
