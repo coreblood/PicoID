@@ -1,6 +1,18 @@
 PicoID - Changelog
 ==================
 
+1.18
+- The Share dialog's X works. Root cause of both close-button reports: the
+  invisible full-width TITLE DRAG STRIP (mouse-enabled, for moving the
+  dialog) overlapped the close button and ate its clicks. The "hitbox
+  slightly to the right" feeling in 1.16 was the thin right-edge sliver the
+  strip did not cover - and 1.17's hit-rect fix, aimed at the wrong cause,
+  clipped away exactly that sliver and killed the button completely. Now the
+  drag strip ends well short of the corner, the close button sits on a
+  higher frame level so nothing mouse-enabled can cover it again, and the
+  1.17 insets are removed - the X behaves like every other WoW dialog's.
+  (You can still drag the dialog by the rest of its title area.)
+
 1.17
 - PICO2 strings: the section separator changed from "|" to "/". In-game
   testing proved the client DOUBLES raw pipes to "||" when text is pasted

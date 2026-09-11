@@ -1,5 +1,5 @@
 ------------------------------------------------------------------
--- PicoID v1.17 — imprinted-proc inventory viewer (WotLK 3.3.5a)
+-- PicoID v1.18 — imprinted-proc inventory viewer (WotLK 3.3.5a)
 -- Shows every equipped item with the procs imprinted on it:
 --   Item - Imprinted proc - Proc ID - Item of origin
 -- Duplicated procs are shown in red (they never fire twice).
@@ -41,6 +41,16 @@
 --   old strings saved in Discord. Also: the direct-send name box got a real
 --   border + placeholder (it was invisible when empty on the dark dialog),
 --   and the share dialog's close button hitbox now sits on the visible X.
+--
+-- v1.18: the share dialog's X actually works now. The 1.17 hit-rect fix
+--   treated the wrong cause and finished the job of killing the button: the
+--   real culprit was the full-width mouse-enabled TITLE DRAG STRIP overlapping
+--   the close button and eating its clicks -- the "offset hitbox" Mhortai
+--   felt in 1.16 was merely the thin right-edge sliver the strip did not
+--   cover, and 1.17's insets clipped away exactly that sliver. Fix: the drag
+--   strip now ends well clear of the button, the button rides a higher frame
+--   level so nothing mouse-enabled can sit on it again, and the insets are
+--   gone -- the X behaves like every other WoW dialog's.
 --
 -- Originally by Mhortai (v1.13), shipped on Uncapped with realm-side fixes.
 --
@@ -1673,7 +1683,11 @@ tinsert(UISpecialFrames, "PicoIDShareFrame")
 
 local shareTitleStrip = CreateFrame("Frame", nil, shareFrame)
 shareTitleStrip:SetPoint("TOPLEFT", 12, -12)
-shareTitleStrip:SetPoint("TOPRIGHT", -12, -12)
+-- v1.18: ends 44px short of the right edge. Full-width, this mouse-enabled
+-- strip sat OVER the close button and swallowed its clicks (the 1.16/1.17 "X
+-- doesn't work" reports in full). Nobody drags a dialog by the pixels under
+-- its X; the button owns that corner now.
+shareTitleStrip:SetPoint("TOPRIGHT", -44, -12)
 shareTitleStrip:SetHeight(20)
 shareTitleStrip:EnableMouse(true)
 shareTitleStrip:RegisterForDrag("LeftButton")
@@ -1685,10 +1699,12 @@ shareTitleText:SetText("PicoID Share")
 
 local shareClose = CreateFrame("Button", nil, shareFrame, "UIPanelCloseButton")
 shareClose:SetPoint("TOPRIGHT", -6, -6)
--- v1.17: the stock 32x32 close art carries transparent padding, so the
--- clickable rect reached well right of the visible X (Mhortai's report).
--- Clip the hit rect onto the glyph itself.
-shareClose:SetHitRectInsets(5, 9, 5, 9)
+-- v1.18: belt-and-braces on top of the shortened drag strip -- keep the X
+-- above ANY mouse-enabled sibling so no future layout change can cover it
+-- again. The 1.17 SetHitRectInsets is deliberately gone: it was aimed at the
+-- wrong cause (stock art padding) and clipped away the one sliver of the
+-- button the old full-width strip had left clickable.
+shareClose:SetFrameLevel(shareTitleStrip:GetFrameLevel() + 5)
 
 local shareLabel1 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 shareLabel1:SetPoint("TOPLEFT", 20, -40)
