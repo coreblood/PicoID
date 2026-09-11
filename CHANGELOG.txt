@@ -1,6 +1,25 @@
 PicoID - Changelog
 ==================
 
+1.17
+- PICO2 strings: the section separator changed from "|" to "/". In-game
+  testing proved the client DOUBLES raw pipes to "||" when text is pasted
+  into an editbox (anti escape-injection) and renders them back as single
+  "|" - so a pasted string looked untouched while its bytes had changed,
+  and the checksum correctly refused it. This broke copy-paste import of
+  every multi-item string since 1.15 (single-item strings have no pipe;
+  direct send never touches an editbox and was immune). New strings start
+  "PICO2:"; the parser still accepts PICO1, and a failed PICO1 checksum
+  gets one "||"->"|" un-mangling retry - old strings saved in Discord now
+  import fine. NOTE: 1.16 cannot read PICO2 strings, so for direct sending
+  BOTH sides should update to 1.17.
+- The direct-send name box is now findable: tooltip-style border plus a
+  grey "character name..." placeholder that clears when you click into it.
+  (It was a borderless transparent rectangle on a dark dialog.)
+- The Share dialog's close button hitbox sat noticeably right of the
+  visible X (transparent padding in the stock button art); the clickable
+  area now matches the glyph.
+
 1.16
 - Direct in-game sharing, approved by the server owner: the Share dialog gains
   a "send to player" row - type an online player's name, press Send, and your

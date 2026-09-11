@@ -1,5 +1,5 @@
 ------------------------------------------------------------------
--- PicoID v1.16 — imprinted-proc inventory viewer (WotLK 3.3.5a)
+-- PicoID v1.17 — imprinted-proc inventory viewer (WotLK 3.3.5a)
 -- Shows every equipped item with the procs imprinted on it:
 --   Item - Imprinted proc - Proc ID - Item of origin
 -- Duplicated procs are shown in red (they never fire twice).
@@ -27,6 +27,20 @@
 --   the admin's, hard-coded. Also: the hover's SP/AP percentages relabeled
 --   as explicit-data maxima (see ScalingNote) -- zeros are now hidden, since
 --   zero only means "no explicit bonus-data row", not "no scaling".
+--
+-- v1.17: PICO2 strings -- the pipe is gone. In-game testing (Mhortai's
+--   screenshot + a clean copy->paste->View of his own uncut string) proved
+--   the CLIENT mangles raw "|" on editbox paste: pipes are doubled to "||"
+--   to block escape injection, the display renders "||" back as "|" so both
+--   boxes LOOK identical, and the checksum rightly fails. That broke the
+--   copy-paste import of every multi-item string since v1.15 day one (only
+--   "|" between gear sections triggers it; direct send never touches an
+--   editbox and was immune). PICO2 uses "/" -- inert in the escape grammar
+--   -- as the section separator; the parser accepts BOTH versions and gives
+--   failed PICO1 checksums one "||"->"|" un-mangling retry, which recovers
+--   old strings saved in Discord. Also: the direct-send name box got a real
+--   border + placeholder (it was invisible when empty on the dark dialog),
+--   and the share dialog's close button hitbox now sits on the visible X.
 --
 -- Originally by Mhortai (v1.13), shipped on Uncapped with realm-side fixes.
 --
@@ -945,12 +959,24 @@ end
   below. THIS copy-paste path stays exactly as it was and remains the
   size-unlimited fallback for gear sets over the direct-send byte cap.
 
-  Format (version-tagged so a future PICO2 can change it):
-    PICO1:<player>:<slot>=<itemId>=<sid>[.<chance>][,<sid>...]|<slot>=...!<sum>
+  Format (the version tag did its job -- PICO2 exists precisely because
+  PICO1 could change nothing else):
+    PICO2:<player>:<slot>=<itemId>=<sid>[.<chance>][,<sid>...]/<slot>=...!<sum>
   The trailing !<sum> is a position-weighted checksum of everything between
-  "PICO1:" and "!". It exists because in-game chat truncates at 255
+  the "PICOn:" tag and "!". It exists because in-game chat truncates at 255
   characters -- a cut or mangled paste is detected and named, instead of
-  silently showing half a gear set.                                        ]]
+  silently showing half a gear set.
+
+  ⚠ WHY "/" AND NOT "|" (v1.17): the WoW client DOUBLES raw pipes to "||"
+  when text is PASTED into an editbox (anti escape-injection), and renders
+  "||" back as a single "|" -- so a pasted PICO1 string looked untouched
+  while its bytes had changed, and the checksum correctly refused it. Every
+  multi-item PICO1 string failed import this way since v1.15. "/" is inert
+  in the escape grammar, like every other character the format uses. The
+  parser still accepts PICO1: valid ones (files, addons passing strings in
+  code) parse as before, and a failed PICO1 checksum gets exactly one
+  "||"->"|" un-mangling retry -- which recovers old strings players saved
+  in Discord and paste in through the mangling client.                     ]]
 
 local function ShareChecksum(s)
     local sum = 0
@@ -986,15 +1012,15 @@ local function BuildShareString()
         end
     end
     if #sections == 0 then return nil end
-    local payload = (UnitName("player") or "?") .. ":" .. table.concat(sections, "|")
-    return "PICO1:" .. payload .. "!" .. ShareChecksum(payload)
+    local payload = (UnitName("player") or "?") .. ":" .. table.concat(sections, "/")
+    return "PICO2:" .. payload .. "!" .. ShareChecksum(payload)
 end
 
 -- Returns a table { name, items = { {slot, itemId, procs={{spellId,chance}}} } }
 -- or nil plus a human-readable reason. Forgiving about surrounding junk
 -- (leading spaces, a whole pasted chat line) but strict about the payload.
 local function ParseShareString(text)
-    local raw = string.match(text or "", "PICO1:%S+")
+    local raw = string.match(text or "", "PICO[12]:%S+")
     if not raw then
         return nil, "No PICO string found in the pasted text."
     end
@@ -1003,12 +1029,25 @@ local function ParseShareString(text)
     if #raw > 2000 then
         return nil, "That is too long to be a PICO string."
     end
-    local payload, sumStr = string.match(raw, "^PICO1:(.*)!(%d+)$")
+    local ver, payload, sumStr = string.match(raw, "^PICO([12]):(.*)!(%d+)$")
     if not payload then
         return nil, "The string is incomplete - its end is missing. In-game chat cuts at 255 characters; get the full string (Discord keeps it in one piece)."
     end
     if ShareChecksum(payload) ~= tonumber(sumStr) then
-        return nil, "The string is damaged or truncated - ask for it to be sent again in one piece."
+        -- v1.17: one un-mangling retry for PICO1. The client doubles raw
+        -- pipes to "||" on editbox PASTE (and renders them back as "|", so
+        -- the box looks untouched). Undo exactly that and re-check; any
+        -- other damage still fails and is named below.
+        local rescued
+        if ver == "1" then
+            rescued = string.gsub(payload, "||", "|")
+        end
+        if rescued and rescued ~= payload
+           and ShareChecksum(rescued) == tonumber(sumStr) then
+            payload = rescued
+        else
+            return nil, "The string is damaged or truncated - ask for it to be sent again in one piece."
+        end
     end
     local name, body = string.match(payload, "^([^:]+):(.+)$")
     if not name or #name > 24 then
@@ -1018,7 +1057,7 @@ local function ParseShareString(text)
     -- v1.16: BOUNDED numeric parsing (a direct-send requirement, applied to
     -- the paste path too): every field has a digit cap and the slot must be
     -- a real equipment slot. Every legitimate 1.15 string passes unchanged.
-    for section in string.gmatch(body, "[^|]+") do
+    for section in string.gmatch(body, ver == "1" and "[^|]+" or "[^/]+") do
         local slot, itemId, plist = string.match(section, "^(%d+)=(%d+)=(.+)$")
         local slotN = (slot and #slot <= 2) and tonumber(slot) or nil
         if slotN and slotN >= 1 and slotN <= 19 and #itemId <= 8 then
@@ -1646,6 +1685,10 @@ shareTitleText:SetText("PicoID Share")
 
 local shareClose = CreateFrame("Button", nil, shareFrame, "UIPanelCloseButton")
 shareClose:SetPoint("TOPRIGHT", -6, -6)
+-- v1.17: the stock 32x32 close art carries transparent padding, so the
+-- clickable rect reached well right of the visible X (Mhortai's report).
+-- Clip the hit rect onto the glyph itself.
+shareClose:SetHitRectInsets(5, 9, 5, 9)
 
 local shareLabel1 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
 shareLabel1:SetPoint("TOPLEFT", 20, -40)
@@ -1683,17 +1726,36 @@ local shareLabel3 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlig
 shareLabel3:SetPoint("TOPLEFT", 20, -152)
 shareLabel3:SetText("Or send it straight to an online player (they need PicoID 1.16+):")
 
+-- v1.17: the box was invisible when empty -- a borderless half-transparent
+-- black rectangle on a dark dialog, next to a lone Send button (Mhortai's
+-- screenshot). A tooltip border + a placeholder make it findable.
 local targetEdit = CreateFrame("EditBox", nil, shareFrame)
-targetEdit:SetPoint("TOPLEFT", 22, -170)
+targetEdit:SetPoint("TOPLEFT", 22, -168)
 targetEdit:SetWidth(150)
-targetEdit:SetHeight(20)
+targetEdit:SetHeight(22)
 targetEdit:SetAutoFocus(false)
 targetEdit:SetMaxLetters(24)
 targetEdit:SetFontObject(ChatFontNormal)
+targetEdit:SetTextInsets(6, 6, 0, 0)
+targetEdit:SetBackdrop({
+    bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
+    edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 10,
+    insets = { left = 3, right = 3, top = 2, bottom = 2 },
+})
+targetEdit:SetBackdropColor(0, 0, 0, 0.6)
+targetEdit:SetBackdropBorderColor(0.6, 0.6, 0.6, 1)
 targetEdit:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
-local targetBg = targetEdit:CreateTexture(nil, "BACKGROUND")
-targetBg:SetAllPoints()
-targetBg:SetTexture(0, 0, 0, 0.5)
+local targetHint = targetEdit:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+targetHint:SetPoint("LEFT", 8, 0)
+targetHint:SetText("character name...")
+targetEdit:SetScript("OnEditFocusGained", function() targetHint:Hide() end)
+targetEdit:SetScript("OnEditFocusLost", function(self)
+    if self:GetText() == "" then targetHint:Show() end
+end)
+targetEdit:SetScript("OnTextChanged", function(self)
+    if self:GetText() ~= "" then targetHint:Hide() end
+end)
 
 local sendBtn = CreateFrame("Button", nil, shareFrame, "UIPanelButtonTemplate")
 sendBtn:SetPoint("LEFT", targetEdit, "RIGHT", 8, 0)
