@@ -1,6 +1,26 @@
 PicoID - Changelog
 ==================
 
+1.19
+- Share exactly the procs you mean: every proc row in the main window now has
+  a tickbox at its left. With nothing ticked, Share works as always - the
+  full list. Tick any procs and the built string carries ONLY those (items
+  whose procs are all unticked drop out of the string entirely). This applies
+  identically to the copy-paste string and the direct Send - they are the
+  same string - so ticking one or two procs and pressing Send whispers
+  exactly those, comfortably inside every direct-send limit.
+- The Share dialog says which mode it is in ("N of M procs - ticked only")
+  and gains a "Clear ticks" button, shown only while anything is ticked.
+  Ticking rows while the dialog is open updates the string live, without
+  stealing your cursor from the name box. The totals line counts ticks
+  ("N ticked for Share").
+- Ticks are a moment's intent, not configuration: they live for the session
+  only, are keyed by slot+proc (they survive sorting, filtering and
+  refreshes), and a gear change prunes ticks whose proc no longer exists -
+  a swapped item can never silently shrink your shares.
+- Receivers see nothing special: a shared subset is an ordinary, shorter
+  list ("1 item, 2 procs"), viewable on any 1.17+.
+
 1.18
 - The Share dialog's X works. Root cause of both close-button reports: the
   invisible full-width TITLE DRAG STRIP (mouse-enabled, for moving the

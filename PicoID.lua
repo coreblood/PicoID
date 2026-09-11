@@ -1,5 +1,5 @@
 ------------------------------------------------------------------
--- PicoID v1.18 — imprinted-proc inventory viewer (WotLK 3.3.5a)
+-- PicoID v1.19 — imprinted-proc inventory viewer (WotLK 3.3.5a)
 -- Shows every equipped item with the procs imprinted on it:
 --   Item - Imprinted proc - Proc ID - Item of origin
 -- Duplicated procs are shown in red (they never fire twice).
@@ -51,6 +51,17 @@
 --   strip now ends well clear of the button, the button rides a higher frame
 --   level so nothing mouse-enabled can sit on it again, and the insets are
 --   gone -- the X behaves like every other WoW dialog's.
+--
+-- v1.19: share exactly the procs you mean. Every proc row grew a tickbox;
+--   with NOTHING ticked, Share behaves as always (the full list), and with
+--   any ticks, the built string -- copy-paste AND direct send, they are the
+--   same string -- carries only the ticked procs (slots with no ticked proc
+--   drop out entirely). The dialog says which mode it is in and offers
+--   "Clear ticks"; the totals line counts ticks; ticks are session-only
+--   intent, keyed by slot+spellId (NOT stored on the pooled row frames,
+--   which recycle on every sort/filter), and gear changes prune ticks whose
+--   proc no longer exists. The receiver sees a perfectly ordinary, shorter
+--   list.
 --
 -- Originally by Mhortai (v1.13), shipped on Uncapped with realm-side fixes.
 --
@@ -134,6 +145,39 @@ local boundProcInfo = {}
 local boundReceived = false
 local RefreshList  -- forward declaration
 
+-- v1.19: share-selection ticks. Session-only intent, keyed "E:<slot>:<sid>"
+-- -- NEVER stored on row frames, which are pooled and recycled on every
+-- sort/filter/scroll and would shuffle the state. Empty table = share all.
+local ticked = {}
+local OnTicksChanged   -- set by the share dialog; called on any tick change
+local function TickedCount()
+    local n = 0
+    for _ in pairs(ticked) do n = n + 1 end
+    return n
+end
+local function ProcTotal()
+    local n = 0
+    for slot = 1, 19 do
+        local procs = boundByKey["E:" .. slot]
+        if procs then n = n + #procs end
+    end
+    return n
+end
+-- Gear changed: drop ticks whose slot no longer carries that proc, so a
+-- swapped item cannot leave a phantom selection silently shrinking shares.
+local function PruneTicks()
+    local changed = false
+    for key in pairs(ticked) do
+        local slot, sid = string.match(key, "^E:(%d+):(%d+)$")
+        local keep = false
+        for _, p in ipairs(boundByKey["E:" .. (slot or "")] or {}) do
+            if p.spellId == tonumber(sid) then keep = true break end
+        end
+        if not keep then ticked[key] = nil changed = true end
+    end
+    return changed
+end
+
 local function OnUncappedLine(body)
     local cmd, rest = string.match(body, "^(%u+):?(.*)$")
     if not cmd then return end
@@ -181,6 +225,7 @@ local function OnUncappedLine(body)
         end
         boundStaging, boundCur = {}, nil
         boundReceived = true
+        if PruneTicks() and OnTicksChanged then OnTicksChanged() end
         if RefreshList then RefreshList() end
         -- ⚠ NO PREFETCH HERE. This branch runs whenever the server pushes the
         -- soulbound stream, which UncappedSoulForge does 2s after PLAYER_LOGIN and
@@ -571,6 +616,22 @@ local function AcquireRow(index)
             tex:Hide()
             row.icons[c] = tex
         end
+        -- v1.19: the share tickbox. State lives in `ticked` by key; the
+        -- checkbox is a dumb view of it, refreshed on every AddRow.
+        local tick = CreateFrame("CheckButton", nil, row, "UICheckButtonTemplate")
+        tick:SetWidth(16)
+        tick:SetHeight(16)
+        tick:SetPoint("LEFT", row, "LEFT", 0, 0)
+        tick:SetScript("OnClick", function(self)
+            local r = self:GetParent()
+            if not r.tickKey then return end
+            if ticked[r.tickKey] then ticked[r.tickKey] = nil
+            else ticked[r.tickKey] = true end
+            RefreshList()
+            if OnTicksChanged then OnTicksChanged() end
+        end)
+        tick:Hide()
+        row.tick = tick
         rowPool[index] = row
     end
     return row
@@ -612,13 +673,14 @@ filterEdit:SetScript("OnTextChanged", function(self)
 end)
 warning:SetPoint("RIGHT", filterEdit, "LEFT", -8, 0)
 
+local TICK_W = 18   -- v1.19: fixed left slot for the share tickbox
 local function Layout()
     local width = scroll:GetWidth()
     if not width or width < 50 then return end
     content:SetWidth(width)
-    local x = 0
+    local x = TICK_W
     for c, col in ipairs(COLS) do
-        local w = math.floor(width * col.w) - 6
+        local w = math.floor((width - TICK_W) * col.w) - 6
         header[c]:ClearAllPoints()
         header[c]:SetPoint("TOPLEFT", frame, "TOPLEFT", 8 + x, -28)
         header[c]:SetWidth(w)
@@ -639,7 +701,7 @@ local function Layout()
                 fs:SetWidth(w)
             end
         end
-        x = x + math.floor(width * col.w)
+        x = x + math.floor((width - TICK_W) * col.w)
     end
     headerLine:ClearAllPoints()
     headerLine:SetPoint("TOPLEFT", 8, -42)
@@ -751,6 +813,16 @@ RefreshList = function()
             end
         end
         row.spellId = cols.spellId
+        -- v1.19: bind the tickbox. Only real proc rows get one; message and
+        -- proc-less rows hide it.
+        if cols.spellId and cols.slot then
+            row.tickKey = "E:" .. cols.slot .. ":" .. cols.spellId
+            row.tick:SetChecked(ticked[row.tickKey] and true or false)
+            row.tick:Show()
+        else
+            row.tickKey = nil
+            row.tick:Hide()
+        end
         SetRowIcons(row, cols)
         if cols.dup then row.bg:SetTexture(1, 0, 0, 0.18) else row.bg:SetTexture(0, 0, 0, 0) end
         row:Show()
@@ -858,9 +930,11 @@ RefreshList = function()
             AddRow({ "Nothing matches \"" .. filterEdit:GetText() .. "\"" }, 0.6, 0.6, 0.6)
         end
 
-        totals:SetText(string.format("|cffffd100%d|r items   |cffffd100%d|r procs%s",
+        local sel = TickedCount()
+        totals:SetText(string.format("|cffffd100%d|r items   |cffffd100%d|r procs%s%s",
             itemCount, procCount,
-            dupProcs > 0 and ("   |cffff4040" .. dupProcs .. " duplicated|r") or ""))
+            dupProcs > 0 and ("   |cffff4040" .. dupProcs .. " duplicated|r") or "",
+            sel > 0 and ("   |cff80ffff" .. sel .. " ticked for Share|r") or ""))
         if duplicates then
             warning:SetText("Duplicate procs (red) fire only once, no matter how many items carry them.")
             warning:Show()
@@ -998,6 +1072,11 @@ end
 
 local function BuildShareString()
     if not boundReceived then return nil end
+    -- v1.19: with any ticks set, only ticked procs ride the string; a slot
+    -- whose procs are all unticked drops out entirely. No ticks = full list,
+    -- exactly the pre-1.19 behavior. Direct send uses this same function, so
+    -- both paths always agree on what "Share" means right now.
+    local anySel = TickedCount() > 0
     local sections = {}
     for slot = 1, 19 do
         local procs = boundByKey["E:" .. slot]
@@ -1006,6 +1085,7 @@ local function BuildShareString()
             local itemId = (link and tonumber(string.match(link, "item:(%d+)"))) or 0
             local parts = {}
             for _, p in ipairs(procs) do
+              if (not anySel) or ticked["E:" .. slot .. ":" .. p.spellId] then
                 -- <sid>[.<chance>][.<srcItem>]; a src with no chance keeps the
                 -- empty middle field (<sid>..<src>) so positions stay fixed.
                 local part = tostring(p.spellId)
@@ -1017,8 +1097,11 @@ local function BuildShareString()
                     part = part .. "." .. ch
                 end
                 parts[#parts + 1] = part
+              end
             end
-            sections[#sections + 1] = slot .. "=" .. itemId .. "=" .. table.concat(parts, ",")
+            if #parts > 0 then
+                sections[#sections + 1] = slot .. "=" .. itemId .. "=" .. table.concat(parts, ",")
+            end
         end
     end
     if #sections == 0 then return nil end
@@ -1710,6 +1793,16 @@ local shareLabel1 = shareFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlig
 shareLabel1:SetPoint("TOPLEFT", 20, -40)
 shareLabel1:SetText("Your PICO string - press Ctrl+C, then paste it anywhere (Discord keeps it in one piece):")
 
+-- v1.19: tick-mode affordances. The label says which procs the string
+-- carries, and Clear ticks returns to share-everything without a trip back
+-- to the main window.
+local clearTicksBtn = CreateFrame("Button", nil, shareFrame, "UIPanelButtonTemplate")
+clearTicksBtn:SetPoint("TOPRIGHT", -24, -34)
+clearTicksBtn:SetWidth(84)
+clearTicksBtn:SetHeight(18)
+clearTicksBtn:SetText("Clear ticks")
+clearTicksBtn:Hide()
+
 local function MakeShareEditBox(topOffset, rightOffset)
     local box = CreateFrame("EditBox", nil, shareFrame)
     box:SetPoint("TOPLEFT", 22, topOffset)
@@ -1816,14 +1909,45 @@ viewBtn:SetScript("OnClick", function()
 end)
 importEdit:SetScript("OnEnterPressed", function() viewBtn:Click() end)
 
-shareFrame:SetScript("OnShow", function()
+-- v1.19: one refresher for the dialog's string + mode line, used by OnShow,
+-- by every tickbox click while the dialog is open (OnTicksChanged), and by
+-- Clear ticks. It never steals focus -- only OnShow does that -- so ticking
+-- rows mid-typing cannot yank the cursor out of the name box.
+local function RefreshShareDialog()
     local s = BuildShareString()
+    local sel, total = TickedCount(), ProcTotal()
+    if sel > 0 then
+        shareLabel1:SetText(string.format(
+            "Your PICO string - |cff80ffff%d of %d procs (ticked only)|r - press Ctrl+C:",
+            sel, total))
+        clearTicksBtn:Show()
+    else
+        shareLabel1:SetText(
+            "Your PICO string - press Ctrl+C, then paste it anywhere (Discord keeps it in one piece):")
+        clearTicksBtn:Hide()
+    end
     if s then
         shareEdit:SetText(s)
+    else
+        shareEdit:SetText("(no imprint data yet - open the PicoID window first, then reopen Share)")
+    end
+end
+OnTicksChanged = function()
+    if shareFrame:IsShown() then RefreshShareDialog() end
+end
+clearTicksBtn:SetScript("OnClick", function()
+    ticked = {}
+    if RefreshList then RefreshList() end
+    RefreshShareDialog()
+end)
+
+shareFrame:SetScript("OnShow", function()
+    RefreshShareDialog()
+    local s = shareEdit:GetText() or ""
+    if string.sub(s, 1, 5) == "PICO2" then
         shareEdit:SetFocus()
         shareEdit:HighlightText()
     else
-        shareEdit:SetText("(no imprint data yet - open the PicoID window first, then reopen Share)")
         shareEdit:HighlightText(0, 0)
     end
     shareStatus:SetText("")
