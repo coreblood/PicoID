@@ -1,5 +1,5 @@
 ------------------------------------------------------------------
--- PicoID v1.19 — imprinted-proc inventory viewer (WotLK 3.3.5a)
+-- PicoID v1.20 — imprinted-proc inventory viewer (WotLK 3.3.5a)
 -- Shows every equipped item with the procs imprinted on it:
 --   Item - Imprinted proc - Proc ID - Item of origin
 -- Duplicated procs are shown in red (they never fire twice).
@@ -62,6 +62,25 @@
 --   which recycle on every sort/filter), and gear changes prune ticks whose
 --   proc no longer exists. The receiver sees a perfectly ordinary, shorter
 --   list.
+--
+-- v1.20: three quality passes.
+--   (1) CHAT SNIFFING: stock 3.3.5 chat has no copy -- so nobody has to.
+--   A PICO string pasted into any chat channel is spotted by the READER's
+--   PicoID, runs through the exact same checksum/bounded-parse gate as a
+--   direct share, and on success prints the same one clickable line, under
+--   the same notification caps and the same accept-shares wall. A string
+--   cut by chat's 255-char limit fails the checksum and stays SILENT --
+--   no error spam in busy channels. Works even when the paster has no
+--   PicoID; needs nothing from the sender. Subset strings (1.19 ticks)
+--   are what fits in one chat line.
+--   (2) Item-cache primers now run a lazy second phase (4/s for 3s, then
+--   1/s until 12s) -- custom items resolve slower than stock ones and the
+--   old 3s window went blank on them.
+--   (3) Origin icons for multi-source procs: no ICIPROCSRC id exists, so
+--   fall back to resolving the FIRST listed origin name against the local
+--   cache. Name lookups cannot ask the server (only id lookups can), so
+--   famous items resolve and never-seen ones stay text-only -- honest
+--   best-effort.
 --
 -- Originally by Mhortai (v1.13), shipped on Uncapped with realm-side fixes.
 --
@@ -758,7 +777,7 @@ PicoID_itemPrimer:SetScript("OnUpdate", function(self, dt)
             end
         end
     end
-    if allKnown or primerElapsed > 3 then
+    if allKnown or primerElapsed > 12 then
         self:Hide(); primerElapsed = 0; primerRepaint = 0
         RefreshList()   -- final re-render with everything cached
     else
@@ -767,8 +786,13 @@ PicoID_itemPrimer:SetScript("OnUpdate", function(self, dt)
         -- ~90 frames of the 3-second window. This realm already has a measured
         -- FPS problem caused by action-bar repaint storms; four repaints a second
         -- is plenty for items trickling out of the cache.
+        -- v1.20: two phases. Eager (4/s) for the first 3s, then LAZY (1/s)
+        -- until 12s: this realm's custom items often resolve slower than the
+        -- old 3s window, which left worn-item and origin icons blank until a
+        -- manual Refresh. The lazy tail is 9 more cheap local re-renders.
         primerRepaint = primerRepaint + dt
-        if primerRepaint >= 0.25 then
+        local interval = (primerElapsed <= 3) and 0.25 or 1
+        if primerRepaint >= interval then
             primerRepaint = 0
             RefreshList()
         end
@@ -794,6 +818,21 @@ RefreshList = function()
         local ot
         if cols.srcItem and cols.srcItem > 0 then
             ot = select(10, GetItemInfo(cols.srcItem))
+        end
+        -- v1.20: multi-source procs carry no ICIPROCSRC id, so resolve the
+        -- FIRST listed origin name against the local cache. A name lookup
+        -- cannot request an uncached item from the server (only id lookups
+        -- can) -- items this client has seen resolve, the rest stay
+        -- text-only. Best-effort by design.
+        if not ot then
+            local firstName = string.match(cols[4] or "", "^([^/]+)")
+            if firstName then
+                firstName = string.gsub(firstName, "^%s+", "")
+                firstName = string.gsub(firstName, "%s+$", "")
+                if firstName ~= "" and firstName ~= "-" then
+                    ot = select(10, GetItemInfo(firstName))
+                end
+            end
         end
         if ot then row.icons[4]:SetTexture(ot); row.icons[4]:Show()
         else row.icons[4]:Hide() end
@@ -1408,6 +1447,15 @@ local function ViewerRender()
             else row.icons[2]:Hide() end
             local ot = (p.src and p.src > 0)
                 and select(10, GetItemInfo(p.src)) or nil
+            if not ot then   -- v1.20: same first-origin-name fallback as the
+                local fn = string.match(cols[4] or "", "^([^/]+)")   -- main list
+                if fn then
+                    fn = string.gsub(string.gsub(fn, "^%s+", ""), "%s+$", "")
+                    if fn ~= "" and fn ~= "-" then
+                        ot = select(10, GetItemInfo(fn))
+                    end
+                end
+            end
             if ot then row.icons[4]:SetTexture(ot); row.icons[4]:Show()
             else row.icons[4]:Hide() end
             row.spellId = sid
@@ -1427,17 +1475,18 @@ local function ViewerRender()
     return allNamed
 end
 
--- Same accumulator pattern as the main window's item primer: re-render four
--- times a second for up to 3s while item names trickle out of the cache.
+-- Same two-phase pattern as the main window's item primer (v1.20): eager
+-- re-renders (4/s) for 3s, then a lazy 1/s tail until 12s for this realm's
+-- slower-caching custom items.
 local viewPrimer = CreateFrame("Frame")
 viewPrimer:Hide()
 local vpElapsed, vpTick = 0, 0
 viewPrimer:SetScript("OnUpdate", function(self, dt)
     vpElapsed = vpElapsed + dt
     vpTick = vpTick + dt
-    if vpTick < 0.25 then return end
+    if vpTick < ((vpElapsed <= 3) and 0.25 or 1) then return end
     vpTick = 0
-    if ViewerRender() or vpElapsed > 3 then
+    if ViewerRender() or vpElapsed > 12 then
         self:Hide()
         vpElapsed, vpTick = 0, 0
     end
@@ -1502,7 +1551,7 @@ end
   concat(payloads) is the ordinary PICO1 string, checksum included, so the
   paste-path parser -- and all of its validation -- is the single decoder. ]]
 
-local StartDirectSend, OnDirectChunk, DirectDebugLine
+local StartDirectSend, OnDirectChunk, OnChatSniff, DirectDebugLine
 do
     local PREFIX            = "PICO"
     local MAX_STRING        = 900   -- whole PICO1 string, bytes
@@ -1628,6 +1677,7 @@ do
     end
 
     ----------------------------- receiver ----------------------------
+    local StoreAndNotify                    -- defined below OnDirectChunk
     local assemblies, nAssemblies = {}, 0   -- lower(sender) -> assembly
     local latestShare = {}                  -- sender -> latest parsed data
     local heldOrder = {}                    -- fifo bounding latestShare
@@ -1686,6 +1736,14 @@ do
         -- who or what mangled it, and noise here would be a griefing lever.
         local data = ParseShareString(table.concat(a.parts, "", 1, a.total))
         if not data then return end
+        StoreAndNotify(sender, data, now)
+    end
+
+    -- v1.20: shared tail for BOTH receive paths (direct whisper chunks and
+    -- chat-pasted strings): hold the latest list per sender, then maybe show
+    -- the one clickable line, under the same caps. One storage, one label,
+    -- one set of rules -- however the string arrived.
+    function StoreAndNotify(sender, data, now)
         data.viaSender = sender
         if not latestShare[sender] then
             heldOrder[#heldOrder + 1] = sender
@@ -1706,12 +1764,28 @@ do
         notifyStamps[#notifyStamps + 1] = now
         local label = sender .. "'s PicoID"
         if data.name and data.name ~= sender then
-            -- The string labels its owner; the whisper names its SENDER.
+            -- The string labels its owner; the message names its SENDER.
             -- Show both when they differ instead of trusting the label.
             label = label .. " (list labeled '" .. data.name .. "')"
         end
         DEFAULT_CHAT_FRAME:AddMessage("|Hpico:" .. sender .. "|h|cff80ffff["
             .. label .. " - click to view]|r|h")
+    end
+
+    -- v1.20: chat sniffing. Stock 3.3.5 chat has no text copy, so the READER
+    -- side does the work: any chat line carrying a PICO string gets the same
+    -- validation and the same clickable line as a direct share. A string cut
+    -- by chat's 255-char limit fails the checksum and stays silent -- busy
+    -- channels get no error spam. The paster needs nothing, not even PicoID.
+    function OnChatSniff(sender, msg)
+        if not db or db.acceptShares == false then return end  -- same wall
+        if not (sender and msg) then return end
+        sender = string.match(sender, "^[^-]+") or sender      -- strip -Realm
+        if sender == "" or sender == (UnitName("player") or "") then return end
+        if not string.find(msg, "PICO", 1, true) then return end  -- cheap gate
+        local data = ParseShareString(msg)
+        if not data then return end
+        StoreAndNotify(sender, data, GetTime())
     end
 
     function DirectDebugLine()
@@ -2156,9 +2230,25 @@ panel.okay, panel.cancel, panel.default = function() end, function() end, functi
 local f = CreateFrame("Frame")
 f:RegisterEvent("ADDON_LOADED")
 f:RegisterEvent("CHAT_MSG_ADDON")
+-- v1.20: chat sniffing sources. Every channel a PICO string can be pasted
+-- into; the handler's cheap plain-find gate makes the per-line cost of all
+-- of these one string.find on non-PICO traffic.
+local PICOID_SNIFF_EVENTS = {
+    CHAT_MSG_SAY = true, CHAT_MSG_YELL = true, CHAT_MSG_WHISPER = true,
+    CHAT_MSG_PARTY = true, CHAT_MSG_GUILD = true, CHAT_MSG_OFFICER = true,
+    CHAT_MSG_RAID = true, CHAT_MSG_RAID_LEADER = true,
+    CHAT_MSG_RAID_WARNING = true, CHAT_MSG_BATTLEGROUND = true,
+    CHAT_MSG_BATTLEGROUND_LEADER = true, CHAT_MSG_CHANNEL = true,
+}
+for ev in pairs(PICOID_SNIFF_EVENTS) do f:RegisterEvent(ev) end
 f:RegisterEvent("UNIT_INVENTORY_CHANGED")
 
 f:SetScript("OnEvent", function(self, event, ...)
+    if PICOID_SNIFF_EVENTS[event] then
+        local msg, sender = ...
+        OnChatSniff(sender, msg)
+        return
+    end
     if event == "CHAT_MSG_ADDON" then
         local prefix, body, channel, sender = ...
         -- v1.16: direct shares arrive on the client-owned PICO prefix,

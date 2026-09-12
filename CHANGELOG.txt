@@ -1,6 +1,29 @@
 PicoID - Changelog
 ==================
 
+1.20
+- Chat pasting now just works - for the READER. Stock 3.3.5 chat has no way
+  to copy text, so PicoID stopped needing you to: when someone pastes a
+  PICO string into any chat channel (say, guild, party, raid, whisper, bg,
+  custom channels), your PicoID spots it, runs it through the exact same
+  checksum-and-parse gate as a direct share, and prints the same single
+  clickable "[Name's PicoID - click to view]" line. Same notification caps,
+  same accept-shares option, same held-list storage. A string cut by chat's
+  255-character limit fails the checksum and stays silent - no error spam
+  in busy channels. The paster needs nothing special - not even PicoID.
+  Note: full lists usually exceed 255 characters and will not survive being
+  pasted into chat; tick a couple of procs (1.19) and the short string fits.
+- Item icons fill in properly on this realm's custom items: the cache
+  primer now runs a lazy second phase (4 renders/s for 3s, then 1/s until
+  12s), so worn-item and origin icons that used to stay blank past the old
+  3-second window appear without a manual Refresh.
+- Origin icons for multi-source procs: the server sends no origin item id
+  when a proc has several sources, so PicoID now resolves the FIRST listed
+  origin name against your local item cache and uses its icon. Name lookups
+  cannot ask the server for uncached items (only id lookups can), so items
+  your client has seen get icons and truly-never-seen ones stay text-only -
+  an honest best-effort.
+
 1.19
 - Share exactly the procs you mean: every proc row in the main window now has
   a tickbox at its left. With nothing ticked, Share works as always - the

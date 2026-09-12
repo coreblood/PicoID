@@ -2,7 +2,7 @@
 ## Title: PicoID
 ## Notes: Lists the procs imprinted on your equipped items with their IDs and item of origin. Companion to SchoolPop's InvID.
 ## Author: Mhortai
-## Version: 1.19
+## Version: 1.20
 ## SavedVariables: PicoIDDB, PicoIDExport
 ## OptionalDeps: SchoolPop
 
